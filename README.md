@@ -45,24 +45,38 @@ bun run build
 
 ### 2) Zowe Setup
 
-Use these commands once on the machine running this MCP server:
+Use one of these setup paths once on the machine running this MCP server:
 
 ```bash
+# Direct z/OSMF
+# Use this when your host responds on /zosmf/info and does not expose API ML at /gateway/api/v1/...
+zowe config init
+# Enter your host, port (10443 is common), username, password, and certificate settings
+# After config is saved, make sure your ~/.zowe/zowe.config.json and selected profile are correct
+
+# Verify you can connect to your Z machine
+zowe zosmf check status --rfj
+
+# API ML / APIML gateway
+# Use this only when the target host exposes the API Mediation Layer gateway
 zowe config auto-init --host "Z.SERVER.IP.OR.HOST"
 # Enter port (default is 10443 for Liberty Server)
 # Enter username and password
-# After config is saved, make sure your ~/.zowe/zowe.config.json and selected profile is setup properly
+# After config is saved, make sure your ~/.zowe/zowe.config.json and selected profile are correct
 
-# If using APIML Auth Gateway
+# If using the APIML auth gateway
 zowe auth login apiml
 
-# Verify you can connect to your Z Machine
+# Verify you can connect to your Z machine
 zowe zosmf check status --rfj
 
 # Optional, but recommended if your TSO profile requires account:
 # zowe profiles create tso mytso --account ACCT001
 # You can get your account number via `tsocmd "LISTUSER MY_USER_ID TSO NORACF"`
 ```
+
+`zowe config auto-init` calls the API ML gateway login endpoint at `/gateway/api/v1/auth/login`.
+If that endpoint returns `404 Not Found`, your target likely exposes z/OSMF directly but not API ML, so use `zowe config init` instead.
 
 If `zowe zosmf check status --rfj` fails, fix auth/profile first before starting this server.
 

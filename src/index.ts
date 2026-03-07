@@ -24,9 +24,9 @@ async function main(): Promise<void> {
         'Zowe live-mode preflight failed.',
         `Details: ${preflight.stderr || preflight.stdout || 'Unknown error'}`,
         'Suggested checks:',
-        '  1. zowe config auto-init',
-        '  2. zowe auth login apiml',
-        '  3. zowe zosmf check status --rfj'
+        '  1. If your system has API ML, run `zowe config auto-init` and `zowe auth login apiml`.',
+        '  2. If your system exposes z/OSMF directly, run `zowe config init` instead.',
+        '  3. Verify with `zowe zosmf check status --rfj`.'
       ].join('\n')
 
       if (process.env.ZOWE_MCP_REQUIRE_PREFLIGHT === 'true') {
