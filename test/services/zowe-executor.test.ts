@@ -5,6 +5,26 @@ beforeAll(() => {
   process.env.ZOWE_MCP_MOCK = 'true'
 })
 
+describe('resolveZoweExecutable', () => {
+  it('uses zowe.cmd on Windows by default', async () => {
+    const { resolveZoweExecutable } = await import('@gestell/mcp/services/zowe-executor')
+
+    expect(resolveZoweExecutable('win32', undefined)).toBe('zowe.cmd')
+  })
+
+  it('uses zowe on non-Windows platforms by default', async () => {
+    const { resolveZoweExecutable } = await import('@gestell/mcp/services/zowe-executor')
+
+    expect(resolveZoweExecutable('linux', undefined)).toBe('zowe')
+  })
+
+  it('prefers an explicit override when provided', async () => {
+    const { resolveZoweExecutable } = await import('@gestell/mcp/services/zowe-executor')
+
+    expect(resolveZoweExecutable('win32', 'custom-zowe')).toBe('custom-zowe')
+  })
+})
+
 describe('executeZowe', () => {
   it('returns correct ZoweResult shape', async () => {
     // Dynamic import to ensure env is set first

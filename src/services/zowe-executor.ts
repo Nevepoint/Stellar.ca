@@ -1,10 +1,11 @@
 import { MOCK_MODE } from '@gestell/mcp/constants'
 import { getMockResponse } from '@gestell/mcp/services/mock-provider'
-import { execFile } from 'child_process'
+import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 
 const execFileAsync = promisify(execFile)
 const DEFAULT_TIMEOUT_MS = 300_000
+const MAX_BUFFER_BYTES = 10 * 1024 * 1024
 
 export interface ZoweResult {
   success: boolean;
@@ -12,6 +13,18 @@ export interface ZoweResult {
   stderr: string;
   data?: unknown;
   exitCode: number;
+}
+
+export function resolveZoweExecutable(
+  platform = process.platform,
+  commandOverride = process.env.ZOWE_MCP_ZOWE_COMMAND
+): string {
+  const trimmedOverride = commandOverride?.trim()
+  if (trimmedOverride) {
+    return trimmedOverride
+  }
+
+  return platform === 'win32' ? 'zowe.cmd' : 'zowe'
 }
 
 /**
@@ -26,11 +39,12 @@ export async function executeZowe(command: string, args: string[] = []): Promise
   try {
     const commandArgs = [...command.trim().split(/\s+/), ...args]
     const timeoutMs = Number(process.env.ZOWE_MCP_EXEC_TIMEOUT_MS || DEFAULT_TIMEOUT_MS)
-    const { stdout, stderr } = await execFileAsync('zowe', commandArgs, {
-      timeout: Number.isFinite(timeoutMs) ? timeoutMs : DEFAULT_TIMEOUT_MS,
-      maxBuffer: 10 * 1024 * 1024,
-      env: { ...process.env }
-    })
+    const zoweExecutable = resolveZoweExecutable()
+    const { stdout, stderr } = await executeZoweProcess(
+      zoweExecutable,
+      commandArgs,
+      Number.isFinite(timeoutMs) ? timeoutMs : DEFAULT_TIMEOUT_MS
+    )
 
     // Try to parse JSON output (Zowe supports --rfj for JSON)
     let data: unknown = undefined
@@ -80,6 +94,99 @@ export async function executeZowe(command: string, args: string[] = []): Promise
       exitCode: execError.code || 1
     }
   }
+}
+
+async function executeZoweProcess(
+  executable: string,
+  args: string[],
+  timeoutMs: number
+): Promise<{ stdout: string; stderr: string }> {
+  if (process.platform !== 'win32') {
+    return execFileAsync(executable, args, {
+      timeout: timeoutMs,
+      maxBuffer: MAX_BUFFER_BYTES,
+      env: { ...process.env }
+    })
+  }
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(executable, args, {
+      env: { ...process.env },
+      shell: true,
+      windowsHide: true
+    })
+
+    let stdout = ''
+    let stderr = ''
+    let finished = false
+    let timedOut = false
+
+    const finishWithError = (error: Error): void => {
+      if (finished) return
+      finished = true
+      clearTimeout(timer)
+      reject(error)
+    }
+
+    const appendChunk = (current: string, chunk: string, stream: 'stdout' | 'stderr'): string => {
+      if (Buffer.byteLength(current) + Buffer.byteLength(chunk) > MAX_BUFFER_BYTES) {
+        child.kill()
+        finishWithError(Object.assign(new Error(`${stream} exceeded maxBuffer`), {
+          stdout,
+          stderr,
+          killed: true,
+          cmd: `${executable} ${args.join(' ')}`
+        }))
+        return current
+      }
+      return current + chunk
+    }
+
+    child.stdout?.on('data', (chunk: string | Buffer) => {
+      stdout = appendChunk(stdout, chunk.toString(), 'stdout')
+    })
+
+    child.stderr?.on('data', (chunk: string | Buffer) => {
+      stderr = appendChunk(stderr, chunk.toString(), 'stderr')
+    })
+
+    child.on('error', (error) => {
+      finishWithError(Object.assign(error, {
+        stdout,
+        stderr,
+        cmd: `${executable} ${args.join(' ')}`
+      }))
+    })
+
+    child.on('close', (code, signal) => {
+      if (finished) return
+      finished = true
+      clearTimeout(timer)
+
+      if (code === 0) {
+        resolve({ stdout, stderr })
+        return
+      }
+
+      const message = timedOut
+        ? `Command timed out after ${timeoutMs}ms`
+        : `Command failed with exit code ${code ?? 'unknown'}`
+
+      reject(Object.assign(new Error(message), {
+        stdout,
+        stderr,
+        code: code ?? 1,
+        signal,
+        killed: timedOut,
+        cmd: `${executable} ${args.join(' ')}`
+      }))
+    })
+
+    const timer = setTimeout(() => {
+      timedOut = true
+      child.kill()
+    }, timeoutMs)
+  })
 }
 
 /**
@@ -167,6 +274,9 @@ function buildErrorMessage(input: ErrorMessageInput): string {
     parts.push(
       'No CLI output captured. This often means credentials/prompt/keychain issues in non-interactive sessions.'
     )
+    if (process.platform === 'win32') {
+      parts.push('On Windows, this can also indicate a CLI launcher/process-spawn problem before Zowe itself started.')
+    }
     parts.push(`Runtime env: HOME=${process.env.HOME || '<unset>'}, ZOWE_CLI_HOME=${process.env.ZOWE_CLI_HOME || '<unset>'}`)
   }
 
